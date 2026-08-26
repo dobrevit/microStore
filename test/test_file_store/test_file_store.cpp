@@ -669,6 +669,34 @@ void test_file_store_compact_basic() {
     TEST_ASSERT_EQUAL(0, memcmp(buf, "v3", 2));
 }
 
+// Records written before a reboot must survive it. On a device with no
+// real-time clock microStore::time() restarts near zero, so every stored
+// record looks "in the future" at init; the store must keep them (clamping
+// their timestamp) instead of sweeping them away.
+void test_file_store_future_timestamps_survive_reload() {
+    reset_ram_fs();
+
+    uint32_t now = microStore::time();
+    {
+        microStore::FileStore writer;
+        auto fs = make_ram_fs();
+        writer.init(fs, "/p");
+        writer.put("a", "v1", /*ttl=*/0, now + 3600);   // "written before the clock reset"
+        writer.put("b", "v2", /*ttl=*/0, now + 7200);
+    }
+
+    microStore::FileStore reader;
+    auto fs = make_ram_fs();
+    reader.init(fs, "/p");                              // init() sweeps
+
+    TEST_ASSERT_EQUAL(2u, reader.size());
+    TEST_ASSERT_TRUE(reader.exists("a"));
+    TEST_ASSERT_TRUE(reader.exists("b"));
+    uint8_t buf[32]; uint16_t sz = sizeof(buf);
+    TEST_ASSERT_TRUE(reader.get("a", buf, &sz));
+    TEST_ASSERT_EQUAL(0, memcmp(buf, "v1", 2));
+}
+
 // A direct compact() call must leave the store writable. The active segment is
 // one of the source segments compaction deletes, so compact() has to close it
 // (LittleFS/FatFS refuse to unlink an open file) and reopen a segment before
@@ -833,6 +861,7 @@ int runUnityTests(void) {
     // Additional edge-case tests
     RUN_TEST(test_file_store_ttl_exists_expires);
     RUN_TEST(test_file_store_compact_basic);
+    RUN_TEST(test_file_store_future_timestamps_survive_reload);
     RUN_TEST(test_file_store_compact_keeps_store_writable);
     // Directory-mode prefix
     RUN_TEST(test_dir_prefix_segment_and_index_names);
